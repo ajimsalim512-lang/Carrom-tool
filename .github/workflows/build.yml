@@ -19,8 +19,8 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
+    - name: Accept Android Licenses
+      run: yes | sdkmanager --licenses || true
 
     - name: Generate Complete Blitz Engine Project
       run: |
@@ -28,13 +28,11 @@ jobs:
         mkdir -p app/src/main/res/values
         mkdir -p app/src/main/res/xml
 
-        # 1. settings.gradle
         cat << 'EOF' > settings.gradle
         rootProject.name = "BlitzUltimateEngine"
         include ':app'
         EOF
 
-        # 2. root build.gradle
         cat << 'EOF' > build.gradle
         buildscript {
             repositories {
@@ -53,7 +51,6 @@ jobs:
         }
         EOF
 
-        # 3. app/build.gradle
         cat << 'EOF' > app/build.gradle
         plugins {
             id 'com.android.application'
@@ -83,14 +80,12 @@ jobs:
         }
         EOF
 
-        # 4. strings.xml
         cat << 'EOF' > app/src/main/res/values/strings.xml
         <resources>
             <string name="app_name">Blitz Aim Engine Pro</string>
         </resources>
         EOF
 
-        # 5. accessibility_service_config.xml
         cat << 'EOF' > app/src/main/res/xml/accessibility_service_config.xml
         <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
             android:accessibilityFeedbackType="feedbackGeneric"
@@ -100,7 +95,6 @@ jobs:
             android:description="@string/app_name" />
         EOF
 
-        # 6. AndroidManifest.xml
         cat << 'EOF' > app/src/main/AndroidManifest.xml
         <manifest xmlns:android="http://schemas.android.com/apk/res/android"
             package="com.blitz.aimengine">
@@ -142,9 +136,7 @@ jobs:
             </application>
         </manifest>
         EOF
-        
-        # 7. CarromAIPhysics.java
-        cat << 'EOF' > app/src/main/java/com/blitz/aimengine/CarromAIPhysics.java
+                cat << 'EOF' > app/src/main/java/com/blitz/aimengine/CarromAIPhysics.java
         package com.blitz.aimengine;
 
         import java.util.ArrayList;
@@ -273,7 +265,6 @@ jobs:
         }
         EOF
 
-        # 8. AutoPlayBotService.java
         cat << 'EOF' > app/src/main/java/com/blitz/aimengine/AutoPlayBotService.java
         package com.blitz.aimengine;
 
@@ -344,8 +335,7 @@ jobs:
             public void onInterrupt() {}
         }
         EOF
-                # 9. FloatingService.java
-        cat << 'EOF' > app/src/main/java/com/blitz/aimengine/FloatingService.java
+                cat << 'EOF' > app/src/main/java/com/blitz/aimengine/FloatingService.java
         package com.blitz.aimengine;
 
         import android.app.Service;
@@ -645,7 +635,6 @@ jobs:
         }
         EOF
 
-        # 10. MainActivity.java
         cat << 'EOF' > app/src/main/java/com/blitz/aimengine/MainActivity.java
         package com.blitz.aimengine;
 
@@ -691,13 +680,13 @@ jobs:
         }
         EOF
 
-    - name: Setup Gradle 8.2
-      uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: 8.2
-
-    - name: Build APK
-      run: gradle assembleDebug --stacktrace
+    - name: Download & Run Gradle Standalone Wrapper
+      run: |
+        curl -s -L -o gradle-8.2.2-bin.zip https://services.gradle.org/distributions/gradle-8.2.2-bin.zip
+        unzip -q gradle-8.2.2-bin.zip
+        gradle-8.2.2/bin/gradle wrapper --gradle-version 8.2.2
+        chmod +x gradlew
+        ./gradlew assembleDebug --no-daemon --stacktrace
 
     - name: Upload Final APK
       uses: actions/upload-artifact@v4
