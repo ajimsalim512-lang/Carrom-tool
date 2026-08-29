@@ -1,0 +1,707 @@
+name: Build Blitz Ultimate Engine Pro
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Generate Complete Blitz Engine Project
+      run: |
+        mkdir -p app/src/main/java/com/blitz/aimengine
+        mkdir -p app/src/main/res/values
+        mkdir -p app/src/main/res/xml
+
+        # 1. settings.gradle
+        cat << 'EOF' > settings.gradle
+        rootProject.name = "BlitzUltimateEngine"
+        include ':app'
+        EOF
+
+        # 2. root build.gradle
+        cat << 'EOF' > build.gradle
+        buildscript {
+            repositories {
+                google()
+                mavenCentral()
+            }
+            dependencies {
+                classpath 'com.android.tools.build:gradle:8.2.2'
+            }
+        }
+        allprojects {
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+        EOF
+
+        # 3. app/build.gradle
+        cat << 'EOF' > app/build.gradle
+        plugins {
+            id 'com.android.application'
+        }
+        android {
+            namespace 'com.blitz.aimengine'
+            compileSdk 34
+            defaultConfig {
+                applicationId "com.blitz.aimengine"
+                minSdk 24
+                targetSdk 34
+                versionCode 4
+                versionName "4.0"
+            }
+            buildTypes {
+                release {
+                    minifyEnabled false
+                }
+            }
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+        }
+        dependencies {
+            implementation 'androidx.appcompat:appcompat:1.6.1'
+        }
+        EOF
+
+        # 4. strings.xml
+        cat << 'EOF' > app/src/main/res/values/strings.xml
+        <resources>
+            <string name="app_name">Blitz Aim Engine Pro</string>
+        </resources>
+        EOF
+
+        # 5. accessibility_service_config.xml
+        cat << 'EOF' > app/src/main/res/xml/accessibility_service_config.xml
+        <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+            android:accessibilityFeedbackType="feedbackGeneric"
+            android:accessibilityFlags="flagDefault"
+            android:canPerformGestures="true"
+            android:canRetrieveWindowContent="true"
+            android:description="@string/app_name" />
+        EOF
+
+        # 6. AndroidManifest.xml
+        cat << 'EOF' > app/src/main/AndroidManifest.xml
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+            package="com.blitz.aimengine">
+
+            <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+            <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+            <application
+                android:allowBackup="true"
+                android:label="@string/app_name"
+                android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                <activity 
+                    android:name=".MainActivity"
+                    android:exported="true">
+                    <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                    </intent-filter>
+                </activity>
+
+                <service
+                    android:name=".FloatingService"
+                    android:enabled="true"
+                    android:exported="false" />
+
+                <service
+                    android:name=".AutoPlayBotService"
+                    android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+                    android:exported="true">
+                    <intent-filter>
+                        <action android:name="android.accessibilityservice.AccessibilityService" />
+                    </intent-filter>
+                    <meta-data
+                        android:name="android.accessibilityservice"
+                        android:resource="@xml/accessibility_service_config" />
+                </service>
+
+            </application>
+        </manifest>
+        EOF
+        
+        # 7. CarromAIPhysics.java
+        cat << 'EOF' > app/src/main/java/com/blitz/aimengine/CarromAIPhysics.java
+        package com.blitz.aimengine;
+
+        import java.util.ArrayList;
+        import java.util.Collections;
+        import java.util.List;
+
+        public class CarromAIPhysics {
+
+            public static final float PUCK_RADIUS = 32.0f;
+            public static final float STRIKER_RADIUS = 42.0f;
+            public static final float TOTAL_IMPACT_DIST = PUCK_RADIUS + STRIKER_RADIUS;
+
+            public static class Vector2 {
+                public float x, y;
+                public Vector2(float x, float y) { this.x = x; this.y = y; }
+                public Vector2 add(Vector2 v) { return new Vector2(this.x + v.x, this.y + v.y); }
+                public Vector2 sub(Vector2 v) { return new Vector2(this.x - v.x, this.y - v.y); }
+                public Vector2 mul(float s) { return new Vector2(this.x * s, this.y * s); }
+                public float length() { return (float) Math.hypot(x, y); }
+                public Vector2 normalize() {
+                    float len = length();
+                    return len != 0 ? new Vector2(x / len, y / len) : new Vector2(0, 0);
+                }
+                public float dot(Vector2 v) { return this.x * v.x + this.y * v.y; }
+                public float dist(Vector2 v) { return sub(v).length(); }
+            }
+
+            public enum PuckType {
+                RED_QUEEN, MY_PUCK, OPPONENT_PUCK
+            }
+
+            public static class Puck {
+                public Vector2 pos;
+                public PuckType type;
+                public Puck(float x, float y, PuckType type) {
+                    this.pos = new Vector2(x, y);
+                    this.type = type;
+                }
+            }
+
+            public static class AIShotPlan {
+                public Vector2 strikerBaselinePos;
+                public Vector2 strikerImpactPos;
+                public Vector2 pullBackVector;
+                public Vector2 targetPuckPos;
+                public Vector2 targetPocketPos;
+                public Vector2 puckReboundEnd;
+                public PuckType targetType;
+                public float shotPower;
+                public float qualityScore;
+                public boolean isValid;
+                public boolean isBankShot;
+            }
+
+            public static List<Vector2> getBoardPockets(float boardWidth, float boardHeight) {
+                List<Vector2> pockets = new ArrayList<>();
+                float offset = 110.0f;
+                pockets.add(new Vector2(offset, offset));
+                pockets.add(new Vector2(boardWidth - offset, offset));
+                pockets.add(new Vector2(offset, boardHeight - offset));
+                pockets.add(new Vector2(boardWidth - offset, boardHeight - offset));
+                return pockets;
+            }
+
+            public static AIShotPlan calculateBestAutoShot(List<Puck> boardPucks, float screenW, float screenH) {
+                List<AIShotPlan> possiblePlans = new ArrayList<>();
+                List<Vector2> pockets = getBoardPockets(screenW, screenH);
+                float baselineY = screenH * 0.76f;
+                float baselineMinX = screenW * 0.22f;
+                float baselineMaxX = screenW * 0.78f;
+
+                for (Puck puck : boardPucks) {
+                    if (puck.type == PuckType.OPPONENT_PUCK) continue;
+
+                    for (Vector2 pocket : pockets) {
+                        Vector2 puckToPocket = pocket.sub(puck.pos).normalize();
+                        Vector2 targetImpact = puck.pos.sub(puckToPocket.mul(TOTAL_IMPACT_DIST));
+
+                        float baselineStrikerX = Math.max(baselineMinX, Math.min(baselineMaxX, targetImpact.x));
+                        Vector2 strikerSpawn = new Vector2(baselineStrikerX, baselineY);
+
+                        Vector2 strikerToImpact = targetImpact.sub(strikerSpawn);
+                        float alignment = strikerToImpact.normalize().dot(puckToPocket);
+
+                        if (alignment > 0.20f) {
+                            AIShotPlan plan = new AIShotPlan();
+                            plan.strikerBaselinePos = strikerSpawn;
+                            plan.strikerImpactPos = targetImpact;
+                            plan.targetPuckPos = puck.pos;
+                            plan.targetPocketPos = pocket;
+                            plan.targetType = puck.type;
+                            plan.isBankShot = false;
+
+                            Vector2 shotDirection = targetImpact.sub(strikerSpawn).normalize();
+                            float powerMultiplier = Math.min(220f, Math.max(120f, targetImpact.dist(pocket) * 0.25f));
+                            plan.pullBackVector = strikerSpawn.sub(shotDirection.mul(powerMultiplier));
+                            plan.shotPower = powerMultiplier;
+
+                            float totalDistance = strikerSpawn.dist(targetImpact) + puck.pos.dist(pocket);
+                            float queenBonus = (puck.type == PuckType.RED_QUEEN) ? -5000f : 0f;
+                            plan.qualityScore = totalDistance + ((1.0f - alignment) * 1200f) + queenBonus;
+
+                            plan.puckReboundEnd = calculateBankTrajectory(pocket, puckToPocket, screenW, screenH);
+                            plan.isValid = true;
+                            possiblePlans.add(plan);
+                        }
+                    }
+                }
+
+                if (possiblePlans.isEmpty()) return null;
+                Collections.sort(possiblePlans, (a, b) -> Float.compare(a.qualityScore, b.qualityScore));
+                return possiblePlans.get(0);
+            }
+
+            private static Vector2 calculateBankTrajectory(Vector2 start, Vector2 dir, float w, float h) {
+                Vector2 curPos = new Vector2(start.x, start.y);
+                Vector2 currentDir = dir.normalize();
+                for (int step = 0; step < 2500; step++) {
+                    curPos.x += currentDir.x * 2.0f;
+                    curPos.y += currentDir.y * 2.0f;
+                    if (curPos.x <= 80 || curPos.x >= w - 80) { currentDir.x = -currentDir.x; break; }
+                    if (curPos.y <= 80 || curPos.y >= h - 80) { currentDir.y = -currentDir.y; break; }
+                }
+                return curPos;
+            }
+        }
+        EOF
+
+        # 8. AutoPlayBotService.java
+        cat << 'EOF' > app/src/main/java/com/blitz/aimengine/AutoPlayBotService.java
+        package com.blitz.aimengine;
+
+        import android.accessibilityservice.AccessibilityService;
+        import android.accessibilityservice.GestureDescription;
+        import android.graphics.Path;
+        import android.os.Build;
+        import android.os.Handler;
+        import android.os.Looper;
+        import android.view.accessibility.AccessibilityEvent;
+
+        public class AutoPlayBotService extends AccessibilityService {
+
+            private static AutoPlayBotService instance;
+            private Handler botHandler = new Handler(Looper.getMainLooper());
+
+            public enum SpeedMode {
+                HUMAN(400, 350, 450),
+                FAST(200, 180, 250),
+                ULTRA_FAST(60, 50, 100);
+
+                public final long strikerPlacementDelay;
+                public final long aimSettleDelay;
+                public final long swipeStrokeDuration;
+
+                SpeedMode(long placeDelay, long aimDelay, long swipeDuration) {
+                    this.strikerPlacementDelay = placeDelay;
+                    this.aimSettleDelay = aimDelay;
+                    this.swipeStrokeDuration = swipeDuration;
+                }
+            }
+
+            @Override
+            public void onServiceConnected() {
+                super.onServiceConnected();
+                instance = this;
+            }
+
+            public static AutoPlayBotService getInstance() {
+                return instance;
+            }
+
+            public void executePrecisionAutoPlay(CarromAIPhysics.AIShotPlan shotPlan, SpeedMode speed) {
+                if (shotPlan == null || !shotPlan.isValid || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+
+                Path sliderSwipe = new Path();
+                sliderSwipe.moveTo(shotPlan.strikerBaselinePos.x, shotPlan.strikerBaselinePos.y);
+                sliderSwipe.lineTo(shotPlan.strikerBaselinePos.x, shotPlan.strikerBaselinePos.y);
+
+                GestureDescription.Builder placeBuilder = new GestureDescription.Builder();
+                placeBuilder.addStroke(new GestureDescription.StrokeDescription(sliderSwipe, 0, 120));
+                dispatchGesture(placeBuilder.build(), null, null);
+
+                botHandler.postDelayed(() -> {
+                    Path shotPath = new Path();
+                    shotPath.moveTo(shotPlan.strikerBaselinePos.x, shotPlan.strikerBaselinePos.y);
+                    shotPath.lineTo(shotPlan.pullBackVector.x, shotPlan.pullBackVector.y);
+
+                    GestureDescription.Builder shotBuilder = new GestureDescription.Builder();
+                    shotBuilder.addStroke(new GestureDescription.StrokeDescription(shotPath, 0, speed.swipeStrokeDuration));
+                    dispatchGesture(shotBuilder.build(), null, null);
+                }, speed.aimSettleDelay);
+            }
+
+            @Override
+            public void onAccessibilityEvent(AccessibilityEvent event) {}
+            @Override
+            public void onInterrupt() {}
+        }
+        EOF
+                # 9. FloatingService.java
+        cat << 'EOF' > app/src/main/java/com/blitz/aimengine/FloatingService.java
+        package com.blitz.aimengine;
+
+        import android.app.Service;
+        import android.content.Intent;
+        import android.graphics.*;
+        import android.os.Build;
+        import android.os.Handler;
+        import android.os.IBinder;
+        import android.os.Looper;
+        import android.view.*;
+        import android.widget.*;
+        import java.util.ArrayList;
+        import java.util.List;
+
+        public class FloatingService extends Service {
+
+            private WindowManager wm;
+            private View aimCanvasOverlay;
+            private LinearLayout floatingMenuRoot;
+            private LinearLayout controlPanel;
+
+            private boolean showGuideline = true;
+            private boolean showReboundPrediction = true;
+            private boolean autoPlayActive = false;
+            private AutoPlayBotService.SpeedMode selectedSpeed = AutoPlayBotService.SpeedMode.HUMAN;
+
+            private CarromAIPhysics.AIShotPlan currentTargetPlan;
+            private Handler autoLoopHandler = new Handler(Looper.getMainLooper());
+            private Runnable autoTurnLoop;
+
+            @Override
+            public void onCreate() {
+                super.onCreate();
+                wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+
+                int overlayFlag = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O 
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY 
+                        : WindowManager.LayoutParams.TYPE_PHONE;
+
+                setupAimCanvas(overlayFlag);
+                setupFloatingMenu(overlayFlag);
+                startAIAnalysisLoop();
+            }
+
+            private void setupAimCanvas(int overlayFlag) {
+                aimCanvasOverlay = new View(this) {
+                    private Paint yellowStrikerLine = new Paint();
+                    private Paint whiteTargetLine = new Paint();
+                    private Paint redQueenLine = new Paint();
+                    private Paint cyanReboundLine = new Paint();
+                    private Paint ghostStrikerCircle = new Paint();
+                    private Paint pocketGlow = new Paint();
+
+                    {
+                        yellowStrikerLine.setColor(Color.parseColor("#FACC15"));
+                        yellowStrikerLine.setStrokeWidth(5.5f);
+                        yellowStrikerLine.setStyle(Paint.Style.STROKE);
+                        yellowStrikerLine.setAntiAlias(true);
+
+                        whiteTargetLine.setColor(Color.WHITE);
+                        whiteTargetLine.setStrokeWidth(4.5f);
+                        whiteTargetLine.setStyle(Paint.Style.STROKE);
+                        whiteTargetLine.setAntiAlias(true);
+
+                        redQueenLine.setColor(Color.parseColor("#EF4444"));
+                        redQueenLine.setStrokeWidth(5.5f);
+                        redQueenLine.setStyle(Paint.Style.STROKE);
+                        redQueenLine.setAntiAlias(true);
+
+                        cyanReboundLine.setColor(Color.parseColor("#00E5FF"));
+                        cyanReboundLine.setStrokeWidth(4.0f);
+                        cyanReboundLine.setStyle(Paint.Style.STROKE);
+                        cyanReboundLine.setPathEffect(new DashPathEffect(new float[]{14, 8}, 0));
+                        cyanReboundLine.setAntiAlias(true);
+
+                        ghostStrikerCircle.setColor(Color.parseColor("#B3FFFFFF"));
+                        ghostStrikerCircle.setStyle(Paint.Style.STROKE);
+                        ghostStrikerCircle.setStrokeWidth(3.0f);
+                        ghostStrikerCircle.setAntiAlias(true);
+
+                        pocketGlow.setColor(Color.parseColor("#34D399"));
+                        pocketGlow.setStyle(Paint.Style.STROKE);
+                        pocketGlow.setStrokeWidth(4.0f);
+                        pocketGlow.setAntiAlias(true);
+                    }
+
+                    @Override
+                    protected void onDraw(Canvas canvas) {
+                        super.onDraw(canvas);
+                        if (!showGuideline || currentTargetPlan == null || !currentTargetPlan.isValid) return;
+
+                        canvas.drawLine(
+                            currentTargetPlan.strikerBaselinePos.x, currentTargetPlan.strikerBaselinePos.y,
+                            currentTargetPlan.strikerImpactPos.x, currentTargetPlan.strikerImpactPos.y,
+                            yellowStrikerLine
+                        );
+
+                        canvas.drawCircle(
+                            currentTargetPlan.strikerImpactPos.x, currentTargetPlan.strikerImpactPos.y,
+                            CarromAIPhysics.STRIKER_RADIUS, ghostStrikerCircle
+                        );
+
+                        Paint puckRayPaint = (currentTargetPlan.targetType == CarromAIPhysics.PuckType.RED_QUEEN) 
+                                ? redQueenLine : whiteTargetLine;
+
+                        canvas.drawLine(
+                            currentTargetPlan.targetPuckPos.x, currentTargetPlan.targetPuckPos.y,
+                            currentTargetPlan.targetPocketPos.x, currentTargetPlan.targetPocketPos.y,
+                            puckRayPaint
+                        );
+
+                        canvas.drawCircle(
+                            currentTargetPlan.targetPocketPos.x, currentTargetPlan.targetPocketPos.y,
+                            50f, pocketGlow
+                        );
+
+                        if (showReboundPrediction && currentTargetPlan.puckReboundEnd != null) {
+                            canvas.drawLine(
+                                currentTargetPlan.targetPocketPos.x, currentTargetPlan.targetPocketPos.y,
+                                currentTargetPlan.puckReboundEnd.x, currentTargetPlan.puckReboundEnd.y,
+                                cyanReboundLine
+                            );
+                        }
+                    }
+                };
+
+                WindowManager.LayoutParams canvasParams = new WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                        overlayFlag,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                );
+                wm.addView(aimCanvasOverlay, canvasParams);
+            }
+
+            private void setupFloatingMenu(int overlayFlag) {
+                floatingMenuRoot = new LinearLayout(this);
+                floatingMenuRoot.setOrientation(LinearLayout.VERTICAL);
+
+                TextView floatingButton = new TextView(this);
+                floatingButton.setText(" ⚡ BLITZ PRO ");
+                floatingButton.setBackgroundColor(Color.parseColor("#E60F172A"));
+                floatingButton.setTextColor(Color.parseColor("#FACC15"));
+                floatingButton.setPadding(26, 20, 26, 20);
+                floatingButton.setTextSize(14f);
+                floatingMenuRoot.addView(floatingButton);
+
+                controlPanel = new LinearLayout(this);
+                controlPanel.setOrientation(LinearLayout.VERTICAL);
+                controlPanel.setBackgroundColor(Color.parseColor("#F2111827"));
+                controlPanel.setPadding(35, 30, 35, 30);
+                controlPanel.setVisibility(View.GONE);
+
+                Switch swPrediction = new Switch(this);
+                swPrediction.setText("Show Prediction");
+                swPrediction.setTextColor(Color.WHITE);
+                swPrediction.setChecked(true);
+
+                LinearLayout subPredictionBox = new LinearLayout(this);
+                subPredictionBox.setOrientation(LinearLayout.VERTICAL);
+                subPredictionBox.setPadding(30, 8, 0, 10);
+
+                CheckBox cbRebound = new CheckBox(this);
+                cbRebound.setText("Prediction After Shot");
+                cbRebound.setTextColor(Color.LTGRAY);
+                cbRebound.setChecked(true);
+                cbRebound.setOnCheckedChangeListener((b, isChecked) -> {
+                    showReboundPrediction = isChecked;
+                    aimCanvasOverlay.invalidate();
+                });
+                subPredictionBox.addView(cbRebound);
+
+                swPrediction.setOnCheckedChangeListener((b, isChecked) -> {
+                    showGuideline = isChecked;
+                    subPredictionBox.setVisibility(isChecked ? View.VISIBLE : View.GONE);
+                    aimCanvasOverlay.invalidate();
+                });
+
+                controlPanel.addView(swPrediction);
+                controlPanel.addView(subPredictionBox);
+
+                Switch swAutoPlay = new Switch(this);
+                swAutoPlay.setText("Enable AutoPlay");
+                swAutoPlay.setTextColor(Color.parseColor("#38BDF8"));
+
+                LinearLayout subAutoPlayBox = new LinearLayout(this);
+                subAutoPlayBox.setOrientation(LinearLayout.VERTICAL);
+                subAutoPlayBox.setPadding(30, 8, 0, 10);
+                subAutoPlayBox.setVisibility(View.GONE);
+
+                RadioGroup speedSelector = new RadioGroup(this);
+                String[] speedNames = {"Human (Natural)", "Fast", "Ultra Fast (Instant)"};
+                for (int i = 0; i < speedNames.length; i++) {
+                    RadioButton rb = new RadioButton(this);
+                    rb.setText(speedNames[i]);
+                    rb.setTextColor(Color.WHITE);
+                    rb.setId(i);
+                    if (i == 0) rb.setChecked(true);
+                    speedSelector.addView(rb);
+                }
+
+                speedSelector.setOnCheckedChangeListener((group, checkedId) -> {
+                    if (checkedId == 0) selectedSpeed = AutoPlayBotService.SpeedMode.HUMAN;
+                    else if (checkedId == 1) selectedSpeed = AutoPlayBotService.SpeedMode.FAST;
+                    else selectedSpeed = AutoPlayBotService.SpeedMode.ULTRA_FAST;
+                });
+
+                subAutoPlayBox.addView(speedSelector);
+
+                swAutoPlay.setOnCheckedChangeListener((b, isChecked) -> {
+                    autoPlayActive = isChecked;
+                    subAutoPlayBox.setVisibility(isChecked ? View.VISIBLE : View.GONE);
+                    if (isChecked) triggerAutoShot();
+                });
+
+                controlPanel.addView(swAutoPlay);
+                controlPanel.addView(subAutoPlayBox);
+
+                Button btnClose = new Button(this);
+                btnClose.setText("CLOSE ENGINE");
+                btnClose.setBackgroundColor(Color.parseColor("#DC2626"));
+                btnClose.setTextColor(Color.WHITE);
+                btnClose.setOnClickListener(v -> stopSelf());
+                controlPanel.addView(btnClose);
+
+                floatingMenuRoot.addView(controlPanel);
+
+                WindowManager.LayoutParams menuParams = new WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                        overlayFlag, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+                );
+                menuParams.gravity = Gravity.TOP | Gravity.START;
+                menuParams.x = 40;
+                menuParams.y = 150;
+
+                floatingButton.setOnClickListener(v -> {
+                    controlPanel.setVisibility(controlPanel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+                });
+
+                floatingMenuRoot.setOnTouchListener(new View.OnTouchListener() {
+                    private int initialX, initialY;
+                    private float initialTouchX, initialTouchY;
+                    @Override
+                    public boolean onTouch(View v, MotionEvent e) {
+                        switch (e.getAction()) {
+                            case MotionEvent.ACTION_DOWN:
+                                initialX = menuParams.x; initialY = menuParams.y;
+                                initialTouchX = e.getRawX(); initialTouchY = e.getRawY();
+                                return true;
+                            case MotionEvent.ACTION_MOVE:
+                                menuParams.x = initialX + (int)(e.getRawX() - initialTouchX);
+                                menuParams.y = initialY + (int)(e.getRawY() - initialTouchY);
+                                wm.updateViewLayout(floatingMenuRoot, menuParams);
+                                return true;
+                        }
+                        return false;
+                    }
+                });
+
+                wm.addView(floatingMenuRoot, menuParams);
+            }
+
+            private void startAIAnalysisLoop() {
+                autoTurnLoop = new Runnable() {
+                    @Override
+                    public void run() {
+                        List<CarromAIPhysics.Puck> pucks = new ArrayList<>();
+                        pucks.add(new CarromAIPhysics.Puck(540, 1100, CarromAIPhysics.PuckType.RED_QUEEN));
+                        pucks.add(new CarromAIPhysics.Puck(360, 1260, CarromAIPhysics.PuckType.MY_PUCK));
+                        pucks.add(new CarromAIPhysics.Puck(720, 980, CarromAIPhysics.PuckType.OPPONENT_PUCK));
+
+                        currentTargetPlan = CarromAIPhysics.calculateBestAutoShot(pucks, 1080, 2400);
+                        aimCanvasOverlay.invalidate();
+
+                        autoLoopHandler.postDelayed(this, 1500);
+                    }
+                };
+                autoLoopHandler.post(autoTurnLoop);
+            }
+
+            private void triggerAutoShot() {
+                if (currentTargetPlan != null && AutoPlayBotService.getInstance() != null) {
+                    AutoPlayBotService.getInstance().executePrecisionAutoPlay(currentTargetPlan, selectedSpeed);
+                }
+            }
+
+            @Override
+            public void onDestroy() {
+                super.onDestroy();
+                autoLoopHandler.removeCallbacks(autoTurnLoop);
+                if (aimCanvasOverlay != null) wm.removeView(aimCanvasOverlay);
+                if (floatingMenuRoot != null) wm.removeView(floatingMenuRoot);
+            }
+
+            @Override
+            public IBinder onBind(Intent intent) { return null; }
+        }
+        EOF
+
+        # 10. MainActivity.java
+        cat << 'EOF' > app/src/main/java/com/blitz/aimengine/MainActivity.java
+        package com.blitz.aimengine;
+
+        import android.app.Activity;
+        import android.content.Intent;
+        import android.net.Uri;
+        import android.os.Build;
+        import android.os.Bundle;
+        import android.provider.Settings;
+        import android.widget.Toast;
+
+        public class MainActivity extends Activity {
+            @Override
+            protected void onCreate(Bundle savedInstanceState) {
+                super.onCreate(savedInstanceState);
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                    Intent intent = new Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName())
+                    );
+                    startActivityForResult(intent, 501);
+                } else {
+                    launchTool();
+                }
+            }
+
+            private void launchTool() {
+                startService(new Intent(this, FloatingService.class));
+                Toast.makeText(this, "Blitz Pro Activated!", Toast.LENGTH_SHORT).show();
+                finish();
+            }
+
+            @Override
+            protected void onActivityResult(int req, int res, Intent data) {
+                super.onActivityResult(req, res, data);
+                if (req == 501 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    if (Settings.canDrawOverlays(this)) {
+                        launchTool();
+                    }
+                }
+            }
+        }
+        EOF
+
+    - name: Setup Gradle 8.2
+      uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: 8.2
+
+    - name: Build APK
+      run: gradle assembleDebug --stacktrace
+
+    - name: Upload Final APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: BlitzAimEngine-APK
+        path: app/build/outputs/apk/debug/*.apk
+        
